@@ -1,0 +1,15 @@
+{
+  "name": "dimensions",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web",
+    "packages/contracts"
+  ],
+  "scripts": {
+    "web:dev": "npm run --workspace @dimensions/web dev",
+    "web:build": "npm run --workspace @dimensions/web build",
+    "web:test": "npm run --workspace @dimensions/web test"
+  }
+}
+

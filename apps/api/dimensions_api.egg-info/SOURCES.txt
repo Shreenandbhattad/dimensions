@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+app/__init__.py
+app/main.py
+dimensions_api.egg-info/PKG-INFO
+dimensions_api.egg-info/SOURCES.txt
+dimensions_api.egg-info/dependency_links.txt
+dimensions_api.egg-info/requires.txt
+dimensions_api.egg-info/top_level.txt
