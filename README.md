@@ -20,15 +20,20 @@ This repository contains:
 
 1. Copy `.env.example` to `.env` and fill values.
 2. Backend:
-   - Install Python 3.11.
+   - Install Python 3.11+.
    - `cd apps/api`
    - `pip install -e .[dev]`
-   - `uvicorn app.main:app --reload --port 8000`
+   - `python -m uvicorn app.main:app --reload --port 8000`
 3. Frontend:
    - `cd apps/web`
    - `npm install`
    - `npm run dev`
 4. Open `http://localhost:5173`.
+
+From repo root you can also run:
+
+- `npm run api:dev`
+- `npm run web:dev`
 
 ## Testing
 
@@ -39,4 +44,3 @@ This repository contains:
 ## CI
 
 GitHub Actions run lint, type checks, and tests for both backend and frontend on pull requests.
-

@@ -7,9 +7,12 @@
     "packages/contracts"
   ],
   "scripts": {
+    "api:dev": "cd apps/api && python -m uvicorn app.main:app --reload --port 8000",
+    "api:lint": "cd apps/api && python -m ruff check app tests",
+    "api:test": "cd apps/api && python -m pytest",
     "web:dev": "npm run --workspace @dimensions/web dev",
     "web:build": "npm run --workspace @dimensions/web build",
-    "web:test": "npm run --workspace @dimensions/web test"
+    "web:test": "npm run --workspace @dimensions/web test",
+    "web:e2e": "npm run --workspace @dimensions/web test:e2e"
   }
 }
-

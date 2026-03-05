@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from uuid import UUID
 
 from app.repositories.deps import get_store
@@ -22,6 +23,19 @@ def _site_payload() -> dict[str, object]:
             ],
         },
     }
+
+
+def _wait_for_terminal_job(client, job_id: str, timeout_s: float = 8.0) -> dict[str, object]:
+    deadline = time.time() + timeout_s
+    latest: dict[str, object] = {}
+    while time.time() < deadline:
+        response = client.get(f"/api/v1/jobs/{job_id}")
+        assert response.status_code == 200
+        latest = response.json()
+        if latest["status"] in {"complete", "failed"}:
+            return latest
+        time.sleep(0.1)
+    raise AssertionError(f"Job {job_id} did not reach terminal state in {timeout_s}s: {latest}")
 
 
 def test_site_creation_triggers_context_ingestion(client, monkeypatch) -> None:
@@ -59,10 +73,9 @@ def test_site_creation_triggers_context_ingestion(client, monkeypatch) -> None:
     job_id = data["context_job_id"]
     site_id = data["site_id"]
 
-    job_response = client.get(f"/api/v1/jobs/{job_id}")
-    assert job_response.status_code == 200
-    assert job_response.json()["status"] == "complete"
-    assert job_response.json()["result"]["building_count"] == 1
+    job_payload = _wait_for_terminal_job(client, job_id)
+    assert job_payload["status"] == "complete"
+    assert job_payload["result"]["building_count"] == 1
 
     context_response = client.get(f"/api/v1/sites/{site_id}/context")
     assert context_response.status_code == 200
@@ -82,6 +95,8 @@ def test_generation_returns_six_compliant_variants(client, monkeypatch) -> None:
     monkeypatch.setattr("app.services.context_ingestion._fetch_dem_points", fake_dem)
 
     create_response = client.post("/api/v1/sites", json=_site_payload())
+    context_job_id = create_response.json()["context_job_id"]
+    _wait_for_terminal_job(client, context_job_id)
     site_id = create_response.json()["site_id"]
 
     generate_payload = {
@@ -99,9 +114,8 @@ def test_generation_returns_six_compliant_variants(client, monkeypatch) -> None:
     assert generate_response.status_code == 202
     job_id = generate_response.json()["job_id"]
 
-    job = client.get(f"/api/v1/jobs/{job_id}")
-    assert job.status_code == 200
-    result = job.json()["result"]
+    job_payload = _wait_for_terminal_job(client, job_id)
+    result = job_payload["result"]
     assert result["generated_count"] == 6
     assert len(result["variant_ids"]) == 6
 
@@ -128,6 +142,7 @@ def test_export_creates_url_and_audit_event(client, monkeypatch) -> None:
     monkeypatch.setattr("app.services.context_ingestion._fetch_dem_points", fake_dem)
 
     site = client.post("/api/v1/sites", json=_site_payload()).json()
+    _wait_for_terminal_job(client, site["context_job_id"])
     generate_payload = {
         "zoning_constraints": {
             "max_height_m": 120,
@@ -139,7 +154,8 @@ def test_export_creates_url_and_audit_event(client, monkeypatch) -> None:
         "seed": 42,
     }
     job_id = client.post(f"/api/v1/sites/{site['site_id']}/generate", json=generate_payload).json()["job_id"]
-    generation_result = client.get(f"/api/v1/jobs/{job_id}").json()["result"]
+    generation_payload = _wait_for_terminal_job(client, job_id)
+    generation_result = generation_payload["result"]
     variant_id = generation_result["variant_ids"][0]
 
     export_response = client.post(
@@ -147,9 +163,9 @@ def test_export_creates_url_and_audit_event(client, monkeypatch) -> None:
         json={"format": "ifc"},
     )
     assert export_response.status_code == 202
-    payload = export_response.json()
+    payload = _wait_for_terminal_job(client, export_response.json()["export_id"])
     assert payload["status"] == "complete"
-    assert payload["url"] is not None
+    assert payload["result"]["url"] is not None
 
     store = get_store()
     events = list(store.audit_events.values())
@@ -165,8 +181,27 @@ def test_ingestion_timeout_sets_failed_job(client, monkeypatch) -> None:
     assert response.status_code == 201
     job_id = response.json()["context_job_id"]
 
-    job_response = client.get(f"/api/v1/jobs/{job_id}")
-    assert job_response.status_code == 200
-    payload = job_response.json()
+    payload = _wait_for_terminal_job(client, job_id)
     assert payload["status"] == "failed"
     assert "timeout" in payload["error"]
+
+
+def test_job_stream_emits_update_and_done_events(client, monkeypatch) -> None:
+    async def fake_buildings(_polygon):
+        return []
+
+    async def fake_dem(_polygon):
+        return [{"lat": 19.076, "lng": 72.826, "elevation_m": 0.0}]
+
+    monkeypatch.setattr("app.services.context_ingestion._fetch_osm_buildings_for_polygon", fake_buildings)
+    monkeypatch.setattr("app.services.context_ingestion._fetch_dem_points", fake_dem)
+
+    response = client.post("/api/v1/sites", json=_site_payload())
+    job_id = response.json()["context_job_id"]
+
+    with client.stream("GET", f"/api/v1/jobs/{job_id}/stream") as stream_response:
+        assert stream_response.status_code == 200
+        payload = "".join(chunk for chunk in stream_response.iter_text())
+
+    assert "event: update" in payload
+    assert "event: done" in payload

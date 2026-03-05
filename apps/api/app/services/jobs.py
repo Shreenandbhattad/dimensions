@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -80,54 +81,72 @@ def run_variant_generation_job(job_id: UUID, store: InMemoryStore) -> None:
             num_variants=num_variants,
             seed=seed,
         )
+        created_variant_ids: list[str] = []
+        result_payload: dict[str, object] = {
+            "site_id": str(site.id),
+            "variant_ids": created_variant_ids,
+            "generated_count": 0,
+            "target_count": len(generated),
+        }
+        store.update_job(job_id, status=JobStatus.RUNNING, progress=15, result=result_payload)
+        for index, item in enumerate(generated):
+            scores = score_variant(
+                site_polygon_geojson=site.polygon_geojson,
+                massing_params=item["massing_params"],
+                metrics=item["metrics"],
+                context_buildings=context_buildings,
+                max_far=zoning.far,
+                cost_per_sqm=cost_per_sqm,
+            )
+            variant = Variant(
+                site_id=site.id,
+                generation_run_id=UUID(item["generation_run_id"]),
+                typology=item["typology"],
+                massing_params=item["massing_params"],
+                scores=scores,
+                compliance_flags=item["compliance_flags"],
+            )
+            gltf_key = export_gltf(
+                site_id=site.id,
+                variant_id=variant.id,
+                massing_params=variant.massing_params,
+                scores=variant.scores,
+                compliance_flags=variant.compliance_flags,
+            )
+            variant.gltf_s3_key = gltf_key
+            store.create_variant(variant)
+            created_variant_ids.append(str(variant.id))
+            progress = min(95, 20 + int((index + 1) * 70 / max(len(generated), 1)))
+            result_payload = {
+                "site_id": str(site.id),
+                "variant_ids": created_variant_ids.copy(),
+                "generated_count": len(created_variant_ids),
+                "target_count": len(generated),
+                "latest_variant_id": str(variant.id),
+                "latest_index": index,
+                "generation_run_id": str(variant.generation_run_id),
+            }
+            store.update_job(job_id, status=JobStatus.RUNNING, progress=progress, result=result_payload)
+            # Brief pacing enables progressive client-side rendering with SSE.
+            time.sleep(0.12)
+
+        store.update_job(job_id, status=JobStatus.COMPLETE, progress=100, result=result_payload)
+        store.create_audit_event(
+            AuditEvent(
+                site_id=site.id,
+                event_type="variants_generated",
+                event_payload=result_payload,
+            )
+        )
     except GenerationError as exc:
         store.update_job(job_id, status=JobStatus.FAILED, progress=100, error=str(exc))
-        return
-
-    created_variant_ids: list[str] = []
-    for index, item in enumerate(generated):
-        scores = score_variant(
-            site_polygon_geojson=site.polygon_geojson,
-            massing_params=item["massing_params"],
-            metrics=item["metrics"],
-            context_buildings=context_buildings,
-            max_far=zoning.far,
-            cost_per_sqm=cost_per_sqm,
+    except Exception as exc:  # pragma: no cover - safety net for worker stability
+        store.update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            progress=100,
+            error=f"Unhandled generation error: {exc}",
         )
-        variant = Variant(
-            site_id=site.id,
-            generation_run_id=UUID(item["generation_run_id"]),
-            typology=item["typology"],
-            massing_params=item["massing_params"],
-            scores=scores,
-            compliance_flags=item["compliance_flags"],
-        )
-        gltf_key = export_gltf(
-            site_id=site.id,
-            variant_id=variant.id,
-            massing_params=variant.massing_params,
-            scores=variant.scores,
-            compliance_flags=variant.compliance_flags,
-        )
-        variant.gltf_s3_key = gltf_key
-        store.create_variant(variant)
-        created_variant_ids.append(str(variant.id))
-        progress = min(95, 20 + int((index + 1) * 70 / max(len(generated), 1)))
-        store.update_job(job_id, progress=progress)
-
-    result = {
-        "site_id": str(site.id),
-        "variant_ids": created_variant_ids,
-        "generated_count": len(created_variant_ids),
-    }
-    store.update_job(job_id, status=JobStatus.COMPLETE, progress=100, result=result)
-    store.create_audit_event(
-        AuditEvent(
-            site_id=site.id,
-            event_type="variants_generated",
-            event_payload=result,
-        )
-    )
 
 
 def run_export_job(job_id: UUID, store: InMemoryStore) -> None:

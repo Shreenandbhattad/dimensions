@@ -6,7 +6,8 @@ from uuid import UUID, uuid4
 
 import numpy as np
 from shapely import affinity
-from shapely.geometry import Polygon
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+from shapely.geometry.base import BaseGeometry
 
 from app.schemas.common import ZoningConstraints
 from app.services.geospatial import (
@@ -36,7 +37,7 @@ class GenerationError(RuntimeError):
 @dataclass(slots=True)
 class ConstraintEnvelope:
     site_polygon_local: Polygon
-    buildable_polygon_local: Polygon
+    buildable_polygon_local: BaseGeometry
     site_area: float
     max_height_m: float
     max_gfa: float
@@ -67,6 +68,21 @@ def _rectangle(cx: float, cy: float, width: float, depth: float, rotation_deg: f
     if rotation_deg:
         poly = affinity.rotate(poly, rotation_deg, origin=(cx, cy))
     return poly
+
+
+def _extract_polygon_parts(geometry: BaseGeometry, *, min_area: float = 1.0) -> list[Polygon]:
+    if geometry.is_empty:
+        return []
+    if isinstance(geometry, Polygon):
+        return [geometry] if geometry.area > min_area else []
+    if isinstance(geometry, MultiPolygon):
+        return [poly for poly in geometry.geoms if poly.area > min_area]
+    if isinstance(geometry, GeometryCollection):
+        parts: list[Polygon] = []
+        for item in geometry.geoms:
+            parts.extend(_extract_polygon_parts(item, min_area=min_area))
+        return parts
+    return []
 
 
 def compute_constraint_envelope(
@@ -107,39 +123,47 @@ def _typology_blocks(
     rotation = float(np.interp(params[3], [0, 1], [-35, 35]))
     floor_height = 3.4
 
-    def block(poly: Polygon, name: str, block_height: float, material: str = "concrete") -> dict[str, Any]:
+    def block(
+        geometry: BaseGeometry, name: str, block_height: float, material: str = "concrete"
+    ) -> list[dict[str, Any]]:
+        polygons = _extract_polygon_parts(geometry, min_area=4.0)
+        if not polygons:
+            return []
         block_height = min(block_height, envelope.max_height_m)
         floors = max(1, int(block_height / floor_height))
-        return {
-            "name": name,
-            "footprint_local": [[float(x), float(y)] for x, y in poly.exterior.coords[:-1]],
-            "height_m": float(floors * floor_height),
-            "floor_count": floors,
-            "floor_height_m": floor_height,
-            "material_hint": material,
-        }
+        output: list[dict[str, Any]] = []
+        for idx, poly in enumerate(polygons):
+            resolved_name = f"{name}_{idx}" if len(polygons) > 1 else name
+            output.append(
+                {
+                    "name": resolved_name,
+                    "footprint_local": [[float(x), float(y)] for x, y in poly.exterior.coords[:-1]],
+                    "height_m": float(floors * floor_height),
+                    "floor_count": floors,
+                    "floor_height_m": floor_height,
+                    "material_hint": material,
+                }
+            )
+        return output
 
     main = _rectangle(centroid.x, centroid.y, width, depth, rotation_deg=rotation)
 
     if typology == "point_tower":
-        return [block(main, "tower", height)]
+        return block(main, "tower", height)
     if typology == "podium_tower":
         podium = _rectangle(centroid.x, centroid.y, width * 1.25, depth * 1.25, rotation_deg=rotation)
-        return [block(podium, "podium", min(height * 0.35, 24.0)), block(main, "tower", height)]
+        return [
+            *block(podium, "podium", min(height * 0.35, 24.0)),
+            *block(main, "tower", height),
+        ]
     if typology == "slab_block":
         slab = _rectangle(centroid.x, centroid.y, width * 1.35, depth * 0.7, rotation_deg=rotation)
-        return [block(slab, "slab", min(height, envelope.max_height_m * 0.7))]
+        return block(slab, "slab", min(height, envelope.max_height_m * 0.7))
     if typology == "courtyard_block":
         outer = _rectangle(centroid.x, centroid.y, width * 1.3, depth * 1.3, rotation_deg=rotation)
         inner = _rectangle(centroid.x, centroid.y, width * 0.55, depth * 0.55, rotation_deg=rotation)
         ring = outer.difference(inner)
-        if ring.geom_type == "Polygon":
-            return [block(ring, "courtyard_ring", min(height, envelope.max_height_m * 0.6))]
-        parts = sorted(ring.geoms, key=lambda g: g.area, reverse=True)[:2]
-        return [
-            block(part, f"courtyard_part_{idx}", min(height, envelope.max_height_m * 0.6))
-            for idx, part in enumerate(parts)
-        ]
+        return block(ring, "courtyard_ring", min(height, envelope.max_height_m * 0.6))
     if typology == "l_shape":
         wing_a = _rectangle(centroid.x - width * 0.15, centroid.y, width * 0.6, depth * 1.2, rotation_deg=rotation)
         wing_b = _rectangle(
@@ -149,31 +173,26 @@ def _typology_blocks(
             depth * 0.45,
             rotation_deg=rotation,
         )
-        return [block(wing_a.union(wing_b), "l_block", min(height, envelope.max_height_m * 0.65))]
+        return block(wing_a.union(wing_b), "l_block", min(height, envelope.max_height_m * 0.65))
     if typology == "u_shape":
         left = _rectangle(centroid.x - width * 0.3, centroid.y, width * 0.28, depth, rotation_deg=rotation)
         right = _rectangle(centroid.x + width * 0.3, centroid.y, width * 0.28, depth, rotation_deg=rotation)
         base = _rectangle(centroid.x, centroid.y - depth * 0.28, width * 0.86, depth * 0.32, rotation_deg=rotation)
-        return [block(left.union(right).union(base), "u_block", min(height, envelope.max_height_m * 0.62))]
+        return block(left.union(right).union(base), "u_block", min(height, envelope.max_height_m * 0.62))
     if typology == "stepped_terrace":
         base = _rectangle(centroid.x, centroid.y, width * 1.15, depth * 1.15, rotation_deg=rotation)
         mid = _rectangle(centroid.x, centroid.y + depth * 0.07, width * 0.9, depth * 0.9, rotation_deg=rotation)
         top = _rectangle(centroid.x, centroid.y + depth * 0.14, width * 0.7, depth * 0.65, rotation_deg=rotation)
         return [
-            block(base, "base", min(height * 0.45, envelope.max_height_m * 0.45)),
-            block(mid, "mid", min(height * 0.7, envelope.max_height_m * 0.7)),
-            block(top, "top", min(height, envelope.max_height_m)),
+            *block(base, "base", min(height * 0.45, envelope.max_height_m * 0.45)),
+            *block(mid, "mid", min(height * 0.7, envelope.max_height_m * 0.7)),
+            *block(top, "top", min(height, envelope.max_height_m)),
         ]
     if typology == "perimeter_block":
         outer = _rectangle(centroid.x, centroid.y, width * 1.5, depth * 1.5, rotation_deg=rotation)
         inner = _rectangle(centroid.x, centroid.y, width * 1.1, depth * 1.1, rotation_deg=rotation)
         ring = outer.difference(inner)
-        if ring.geom_type == "Polygon":
-            return [block(ring, "perimeter", min(height, envelope.max_height_m * 0.55))]
-        parts = sorted(ring.geoms, key=lambda g: g.area, reverse=True)[:3]
-        return [
-            block(part, f"perimeter_{idx}", min(height, envelope.max_height_m * 0.55)) for idx, part in enumerate(parts)
-        ]
+        return block(ring, "perimeter", min(height, envelope.max_height_m * 0.55))
 
     # Should never happen due to fixed typology list.
     raise GenerationError(f"Unsupported typology: {typology}")
@@ -195,12 +214,7 @@ def _clip_blocks_to_envelope(blocks: list[dict[str, Any]], envelope: ConstraintE
     for block in blocks:
         poly = _block_polygon(block)
         clipped_poly = poly.intersection(envelope.buildable_polygon_local)
-        if clipped_poly.is_empty:
-            continue
-        if clipped_poly.geom_type == "Polygon":
-            parts = [clipped_poly]
-        else:
-            parts = [part for part in clipped_poly.geoms if part.area > 1.0]
+        parts = _extract_polygon_parts(clipped_poly, min_area=1.0)
         for index, part in enumerate(parts):
             block_copy = dict(block)
             block_copy["name"] = f"{block['name']}_{index}"

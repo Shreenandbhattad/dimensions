@@ -6,6 +6,7 @@ type SortField = "solar_access" | "daylight_factor" | "shadow_impact" | "gfa_sqm
 interface VariantGalleryProps {
   variants: VariantResponse[];
   selectedVariantId: string | null;
+  recentVariantIds: string[];
   onSelect: (variantId: string) => void;
   onExport: (variantId: string, format: "gltf" | "ifc") => void;
 }
@@ -21,6 +22,7 @@ function formatCurrency(value: number): string {
 export function VariantGallery({
   variants,
   selectedVariantId,
+  recentVariantIds,
   onSelect,
   onExport
 }: VariantGalleryProps) {
@@ -63,10 +65,11 @@ export function VariantGallery({
       <div className="variant-grid">
         {sorted.map((variant) => {
           const isSelected = variant.id === selectedVariantId;
+          const isNew = recentVariantIds.includes(variant.id);
           return (
             <article
               key={variant.id}
-              className={`variant-card ${isSelected ? "selected" : ""}`}
+              className={`variant-card ${isSelected ? "selected" : ""} ${isNew ? "new-card" : ""}`}
               onClick={() => onSelect(variant.id)}
             >
               <div className="variant-title">
@@ -108,4 +111,3 @@ export function VariantGallery({
     </div>
   );
 }
-
