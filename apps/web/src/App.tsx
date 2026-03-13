@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { VariantResponse, ZoningConstraints } from "@dimensions/contracts";
 import {
@@ -14,8 +14,10 @@ import {
 } from "./api/client";
 import { Context3DView } from "./components/Context3DView";
 import { DashboardSummary } from "./components/DashboardSummary";
+import { MassingWorkbench } from "./components/MassingWorkbench";
 import { ProjectsPanel } from "./components/ProjectsPanel";
 import { SiteDrawMap, type SiteMapView } from "./components/SiteDrawMap";
+import { SolarStudyBoard } from "./components/SolarStudyBoard";
 import { VariantGallery } from "./components/VariantGallery";
 import { WorkflowStepper } from "./components/WorkflowStepper";
 import { useAppStore } from "./store/useAppStore";
@@ -124,14 +126,18 @@ export default function App() {
         if (incoming.length > 0) {
           incoming.forEach((id) => seenVariantIdsRef.current.add(id));
           const fetched = await Promise.all(incoming.map((id) => getVariant(id)));
-          upsertVariants(fetched);
-          setRecentVariantIds((current) => [...current, ...incoming]);
+          startTransition(() => {
+            upsertVariants(fetched);
+            setRecentVariantIds((current) => [...current, ...incoming]);
+            if (!selectedVariantId) {
+              setSelectedVariant(fetched[0]?.id ?? null);
+            }
+          });
           window.setTimeout(() => {
-            setRecentVariantIds((current) => current.filter((id) => !incoming.includes(id)));
+            startTransition(() => {
+              setRecentVariantIds((current) => current.filter((id) => !incoming.includes(id)));
+            });
           }, 1000);
-          if (!selectedVariantId) {
-            setSelectedVariant(fetched[0]?.id ?? null);
-          }
           setStatusText(
             `Generation: ${job.result.generated_count ?? incoming.length}/${job.result.target_count ?? 6} variants ready.`
           );
@@ -167,6 +173,7 @@ export default function App() {
     if (!selectedVariantId) return null;
     return variants.find((variant) => variant.id === selectedVariantId) ?? null;
   }, [selectedVariantId, variants]);
+  const deferredSelectedVariant = useDeferredValue(selectedVariant);
 
   const handleLocateAddress = async () => {
     if (!backendOnline) {
@@ -263,10 +270,10 @@ export default function App() {
       <header className="hero">
         <div>
           <h1>Dimensions</h1>
-          <p>Drop a site. Get compliant, scored massing options. Export to Revit-ready IFC.</p>
+          <p>Drop a site. Read the sun. Model the massing. Export a compliant option to Revit-ready IFC.</p>
         </div>
         <div className={`status-pill ${backendOnline ? "online" : "offline"}`}>
-          {backendOnline ? "Backend: connected" : "Backend: offline"} · {statusText}
+          {backendOnline ? "Backend: connected" : "Backend: offline"} | {statusText}
         </div>
       </header>
       {jobProgress !== null ? (
@@ -398,7 +405,12 @@ export default function App() {
 
       <section className="grid two-col section-fade-in-delayed">
         <SiteDrawMap initialView={viewState} onViewChange={setViewState} onPolygonReady={setPolygon} />
-        <Context3DView context={context} sitePolygon={polygon} selectedVariant={selectedVariant} />
+        <Context3DView context={context} sitePolygon={polygon} selectedVariant={deferredSelectedVariant} />
+      </section>
+
+      <section className="grid two-col analysis-grid section-fade-in-delayed">
+        <SolarStudyBoard context={context} sitePolygon={polygon} selectedVariant={deferredSelectedVariant} />
+        <MassingWorkbench variant={deferredSelectedVariant} />
       </section>
 
       <VariantGallery

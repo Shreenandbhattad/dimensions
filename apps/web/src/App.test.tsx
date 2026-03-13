@@ -15,6 +15,14 @@ vi.mock("./components/VariantGallery", () => ({
   VariantGallery: () => <div>VariantGalleryMock</div>
 }));
 
+vi.mock("./components/SolarStudyBoard", () => ({
+  SolarStudyBoard: () => <div>SolarStudyBoardMock</div>
+}));
+
+vi.mock("./components/MassingWorkbench", () => ({
+  MassingWorkbench: () => <div>MassingWorkbenchMock</div>
+}));
+
 describe("App", () => {
   it("renders core header", () => {
     const client = new QueryClient({

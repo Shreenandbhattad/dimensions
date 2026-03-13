@@ -40,8 +40,8 @@ export function DashboardSummary({
           <>
             <strong>{selectedVariant.typology.replaceAll("_", " ")}</strong>
             <small>
-              Solar {scoreBadge(selectedVariant.scores.solar_access)} · Daylight{" "}
-              {scoreBadge(selectedVariant.scores.daylight_factor)}
+              Solar {scoreBadge(selectedVariant.scores.solar_access)} | Daylight{" "}
+              {scoreBadge(selectedVariant.scores.daylight_factor)} | GFA {Math.round(selectedVariant.scores.gfa_sqm)} sqm
             </small>
           </>
         ) : (
@@ -54,4 +54,3 @@ export function DashboardSummary({
     </section>
   );
 }
-

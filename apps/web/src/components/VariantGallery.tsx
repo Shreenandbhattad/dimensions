@@ -19,6 +19,15 @@ function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(value);
 }
 
+function complianceState(variant: VariantResponse): { label: string; ok: boolean }[] {
+  return [
+    { label: "Setback", ok: variant.compliance_flags.setback_ok },
+    { label: "Height", ok: variant.compliance_flags.height_ok },
+    { label: "FAR", ok: variant.compliance_flags.far_ok },
+    { label: "Coverage", ok: variant.compliance_flags.coverage_ok }
+  ];
+}
+
 export function VariantGallery({
   variants,
   selectedVariantId,
@@ -43,7 +52,10 @@ export function VariantGallery({
   return (
     <div className="panel variants-panel">
       <div className="panel-header">
-        <h3>4. Variant Comparison</h3>
+        <div>
+          <h3>Variant Comparison</h3>
+          <p className="panel-hint">Sort, inspect, and export only the compliant options produced in this session.</p>
+        </div>
         <div className="sort-controls">
           <label>
             Sort:
@@ -76,14 +88,45 @@ export function VariantGallery({
                 <span>{variant.typology.replaceAll("_", " ")}</span>
                 <small>{variant.id.slice(0, 8)}</small>
               </div>
-              <ul>
-                <li>Solar: {formatPercent(variant.scores.solar_access)}</li>
-                <li>Daylight: {formatPercent(variant.scores.daylight_factor)}</li>
-                <li>Shadow: {formatPercent(variant.scores.shadow_impact)}</li>
-                <li>FAR: {variant.scores.far_achieved.toFixed(2)}</li>
-                <li>GFA: {Math.round(variant.scores.gfa_sqm)} sqm</li>
-                <li>Cost index: ${formatCurrency(variant.scores.cost_index_usd)}</li>
-              </ul>
+
+              <div className="variant-meter-stack">
+                <div className="variant-meter">
+                  <span>Solar</span>
+                  <strong>{formatPercent(variant.scores.solar_access)}</strong>
+                  <div className="meter-rail">
+                    <div style={{ width: `${variant.scores.solar_access * 100}%` }} />
+                  </div>
+                </div>
+                <div className="variant-meter">
+                  <span>Daylight</span>
+                  <strong>{formatPercent(variant.scores.daylight_factor)}</strong>
+                  <div className="meter-rail">
+                    <div style={{ width: `${variant.scores.daylight_factor * 100}%` }} />
+                  </div>
+                </div>
+                <div className="variant-meter">
+                  <span>Shadow impact</span>
+                  <strong>{formatPercent(variant.scores.shadow_impact)}</strong>
+                  <div className="meter-rail shadow">
+                    <div style={{ width: `${variant.scores.shadow_impact * 100}%` }} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="variant-inline-stats">
+                <span>FAR {variant.scores.far_achieved.toFixed(2)}</span>
+                <span>GFA {Math.round(variant.scores.gfa_sqm)} sqm</span>
+                <span>Cost ${formatCurrency(variant.scores.cost_index_usd)}</span>
+              </div>
+
+              <div className="variant-badges">
+                {complianceState(variant).map((item) => (
+                  <span key={item.label} className={item.ok ? "ok" : "warn"}>
+                    {item.label}
+                  </span>
+                ))}
+              </div>
+
               <div className="export-row">
                 <button
                   type="button"
